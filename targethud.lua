@@ -1,0 +1,613 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local lp = Players.LocalPlayer
+local prefix = "TargetBeam_"
+
+local Settings = {
+    GUI = {
+        Size = UDim2.new(0, 310, 0, 120),
+        Position = UDim2.new(0.5, -155, 0.8, -5),
+        OuterColor = Color3.fromRGB(255, 209, 223),
+        InnerColor = Color3.fromRGB(203, 195, 227),
+        StrokeColor = Color3.fromRGB(200, 150, 180),
+        BackgroundImage = "http://www.roblox.com/asset/?id=661165864",
+        BackgroundTransparency = 0.6
+    },
+    Avatar = {
+        Size = UDim2.new(0, 80, 0, 80),
+        Position = UDim2.new(0, 5, 0.1, 0),
+        StrokeColor = Color3.fromRGB(200, 150, 180)
+    },
+    Text = {
+        Font = Enum.Font.SourceSans,
+        Size = 14,
+        Color = Color3.fromRGB(255, 255, 255),
+        StrokeColor = Color3.fromRGB(0, 0, 0),
+        StrokeTransparency = 0.3
+    },
+    Bars = {
+        HealthColor = Color3.fromRGB(0, 255, 0),
+        ArmorColor = Color3.fromRGB(0, 170, 255),
+        BackgroundColor = Color3.fromRGB(50, 50, 50),
+        Size = UDim2.new(1, -100, 0, 8),
+        AnimationDuration = 0.3,
+        DamageFlashColor = Color3.fromRGB(255, 50, 50),
+        HealFlashColor = Color3.fromRGB(50, 255, 50),
+        FlashDuration = 0.15
+    },
+    Features = {
+        ShowAmmo = true,
+        CopyButtons = true,
+        AnimatedBars = true
+    }
+}
+
+local lastHealth = 0
+local lastArmor = 0
+local healthTween, armorTween = nil, nil
+local healthFlashTween, armorFlashTween = nil, nil
+local dragging = false
+local dragInput, dragStart, startPos
+
+local function getTarget()
+    local playersFolder = workspace:FindFirstChild("Players")
+    if not playersFolder then return nil end
+
+    local folder = playersFolder:FindFirstChild(lp.Name)
+    if not folder then return nil end
+
+    for _, obj in ipairs(folder:GetChildren()) do
+        if obj:IsA("Beam") and obj.Name:sub(1, #prefix) == prefix then
+            local name = obj.Name:sub(#prefix + 1)
+            return Players:FindFirstChild(name)
+        end
+    end
+
+    return nil
+end
+
+local targetPlayer = nil
+local targetCharacter = nil
+local targetHumanoid = nil
+local targetBodyEffects = nil
+local targetArmorValue = nil
+
+local existingGui = Players.LocalPlayer:FindFirstChild("PlayerGui"):FindFirstChild("TargetGUI")
+if existingGui then
+    existingGui:Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui", Players.LocalPlayer:WaitForChild("PlayerGui"))
+screenGui.Name = "TargetGUI"
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local outerFrame = Instance.new("Frame", screenGui)
+outerFrame.Position = Settings.GUI.Position
+outerFrame.Size = Settings.GUI.Size
+outerFrame.BackgroundColor3 = Settings.GUI.OuterColor
+outerFrame.BorderSizePixel = 0
+
+local outerStroke = Instance.new("UIStroke", outerFrame)
+outerStroke.Thickness = 3
+outerStroke.Color = Settings.GUI.StrokeColor
+outerStroke.Transparency = 0
+
+local function updateDrag(input)
+    local delta = input.Position - dragStart
+    outerFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+outerFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = outerFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+outerFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        updateDrag(input)
+    end
+end)
+
+local frame = Instance.new("Frame", outerFrame)
+frame.Position = UDim2.new(0, 5, 0, 5)
+frame.Size = UDim2.new(1, -10, 1, -10)
+frame.BackgroundColor3 = Settings.GUI.InnerColor
+frame.BorderSizePixel = 0
+
+local frameImage = Instance.new("ImageLabel", frame)
+frameImage.Size = UDim2.new(1, 0, 1, 0)
+frameImage.Position = UDim2.new(0, 0, 0, 0)
+frameImage.BackgroundTransparency = 1
+frameImage.Image = Settings.GUI.BackgroundImage
+frameImage.ImageTransparency = Settings.GUI.BackgroundTransparency
+
+local innerStroke = Instance.new("UIStroke", frame)
+innerStroke.Thickness = 2
+innerStroke.Color = Settings.GUI.StrokeColor
+innerStroke.Transparency = 0.2
+
+local avatarContainer = Instance.new("Frame", frame)
+avatarContainer.Position = Settings.Avatar.Position
+avatarContainer.Size = Settings.Avatar.Size
+avatarContainer.BackgroundTransparency = 1
+
+local avatar = Instance.new("ImageLabel", avatarContainer)
+avatar.Size = UDim2.new(1, -4, 1, -4)
+avatar.Position = UDim2.new(0, 2, 0, 2)
+avatar.BackgroundTransparency = 1
+avatar.Image = ""
+
+local avatarStroke = Instance.new("UIStroke", avatar)
+avatarStroke.Thickness = 2
+avatarStroke.Color = Settings.Avatar.StrokeColor
+avatarStroke.Transparency = 0
+
+local crewIdLabel = Instance.new("TextLabel", avatarContainer)
+crewIdLabel.Name = "CrewIdLabel"
+crewIdLabel.Position = UDim2.new(0, 0, 1, 2)
+crewIdLabel.Size = UDim2.new(1, 0, 0, 15)
+crewIdLabel.TextXAlignment = Enum.TextXAlignment.Center
+crewIdLabel.TextColor3 = Settings.Text.Color
+crewIdLabel.BackgroundTransparency = 1
+crewIdLabel.Font = Settings.Text.Font
+crewIdLabel.TextSize = Settings.Text.Size - 1
+crewIdLabel.Text = "Crew: None"
+
+local crewIdStroke = Instance.new("UIStroke", crewIdLabel)
+crewIdStroke.Thickness = 1.5
+crewIdStroke.Color = Settings.Text.StrokeColor
+crewIdStroke.Transparency = Settings.Text.StrokeTransparency
+
+local avatarCopyButton = Instance.new("TextButton", avatarContainer)
+avatarCopyButton.Size = UDim2.new(1, 0, 1, 0)
+avatarCopyButton.BackgroundTransparency = 1
+avatarCopyButton.Text = ""
+avatarCopyButton.ZIndex = 10
+
+local function copyToClipboard(text)
+    if not text then return end
+    local clipBoard = setclipboard or toclipboard or set_clipboard or (Clipboard and Clipboard.set)
+    if clipBoard then
+        clipBoard(text)
+    else
+        UserInputService:SetClipboard(text)
+    end
+end
+
+avatarCopyButton.MouseButton1Click:Connect(function()
+    if targetPlayer then
+        copyToClipboard("https://www.roblox.com/users/"..targetPlayer.UserId.."/profile")
+    end
+end)
+
+local function createLabel(name, posY, hasCopyButton)
+    local labelContainer = Instance.new("Frame", frame)
+    labelContainer.Name = name.."Container"
+    labelContainer.Position = UDim2.new(0, 90, 0, posY)
+    labelContainer.Size = UDim2.new(1, hasCopyButton and -95 or -90, 0, 15)
+    labelContainer.BackgroundTransparency = 1
+
+    local label = Instance.new("TextLabel", labelContainer)
+    label.Name = name
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.Size = UDim2.new(1, hasCopyButton and -20 or 0, 1, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextColor3 = Settings.Text.Color
+    label.BackgroundTransparency = 1
+    label.Font = Settings.Text.Font
+    label.TextSize = Settings.Text.Size
+    
+    local textStroke = Instance.new("UIStroke", label)
+    textStroke.Thickness = 1.5
+    textStroke.Color = Settings.Text.StrokeColor
+    textStroke.Transparency = Settings.Text.StrokeTransparency
+    
+    if hasCopyButton and Settings.Features.CopyButtons then
+        local copyButton = Instance.new("ImageButton", labelContainer)
+        copyButton.Name = name.."CopyButton"
+        copyButton.Position = UDim2.new(1, -18, 0, 0)
+        copyButton.Size = UDim2.new(0, 15, 0, 15)
+        copyButton.BackgroundTransparency = 1
+        copyButton.Image = "http://www.roblox.com/asset/?id=18751598717"
+        copyButton.ZIndex = 10
+        
+        copyButton.MouseButton1Click:Connect(function()
+            if targetPlayer then
+                local valueToCopy
+                if name == "DisplayName" then
+                    valueToCopy = targetPlayer.DisplayName
+                elseif name == "Username" then
+                    valueToCopy = targetPlayer.Name
+                elseif name == "UserId" then
+                    valueToCopy = tostring(targetPlayer.UserId)
+                end
+                if valueToCopy then
+                    copyToClipboard(valueToCopy)
+                end
+            end
+        end)
+    end
+    
+    return label
+end
+
+local displayName = createLabel("DisplayName", 5, true)
+local username = createLabel("Username", 20, true)
+local userId = createLabel("UserId", 35, true)
+
+local healthText = Instance.new("TextLabel", frame)
+healthText.Name = "HealthText"
+healthText.Position = UDim2.new(0, 90, 0, 50)
+healthText.Size = UDim2.new(0.45, 0, 0, 15)
+healthText.TextXAlignment = Enum.TextXAlignment.Left
+healthText.TextColor3 = Settings.Text.Color
+healthText.BackgroundTransparency = 1
+healthText.Font = Settings.Text.Font
+healthText.TextSize = Settings.Text.Size
+
+local healthTextStroke = Instance.new("UIStroke", healthText)
+healthTextStroke.Thickness = 1.5
+healthTextStroke.Color = Settings.Text.StrokeColor
+healthTextStroke.Transparency = Settings.Text.StrokeTransparency
+
+local armorText = Instance.new("TextLabel", frame)
+armorText.Name = "ArmorText"
+armorText.Position = UDim2.new(0.45, 5, 0, 50)
+armorText.Size = UDim2.new(0.45, -5, 0, 15)
+armorText.TextXAlignment = Enum.TextXAlignment.Right
+armorText.TextColor3 = Settings.Text.Color
+armorText.BackgroundTransparency = 1
+armorText.Font = Settings.Text.Font
+armorText.TextSize = Settings.Text.Size
+
+local armorTextStroke = Instance.new("UIStroke", armorText)
+armorTextStroke.Thickness = 1.5
+armorTextStroke.Color = Settings.Text.StrokeColor
+armorTextStroke.Transparency = Settings.Text.StrokeTransparency
+
+local toolName = Instance.new("TextLabel", frame)
+toolName.Name = "ToolName"
+toolName.Position = UDim2.new(0, 90, 0, 65)
+toolName.Size = UDim2.new(0.45, 0, 0, 15)
+toolName.TextXAlignment = Enum.TextXAlignment.Left
+toolName.TextColor3 = Settings.Text.Color
+toolName.BackgroundTransparency = 1
+toolName.Font = Settings.Text.Font
+toolName.TextSize = Settings.Text.Size
+
+local toolNameStroke = Instance.new("UIStroke", toolName)
+toolNameStroke.Thickness = 1.5
+toolNameStroke.Color = Settings.Text.StrokeColor
+toolNameStroke.Transparency = Settings.Text.StrokeTransparency
+
+local ammoText = Instance.new("TextLabel", frame)
+ammoText.Name = "AmmoText"
+ammoText.Position = UDim2.new(0.45, 5, 0, 65)
+ammoText.Size = UDim2.new(0.45, -5, 0, 15)
+ammoText.TextXAlignment = Enum.TextXAlignment.Right
+ammoText.TextColor3 = Settings.Text.Color
+ammoText.BackgroundTransparency = 1
+ammoText.Font = Settings.Text.Font
+ammoText.TextSize = Settings.Text.Size
+
+local ammoTextStroke = Instance.new("UIStroke", ammoText)
+ammoTextStroke.Thickness = 1.5
+ammoTextStroke.Color = Settings.Text.StrokeColor
+ammoTextStroke.Transparency = Settings.Text.StrokeTransparency
+
+local healthBarBG = Instance.new("Frame", frame)
+healthBarBG.Position = UDim2.new(0, 90, 1, -25)
+healthBarBG.Size = Settings.Bars.Size
+healthBarBG.BackgroundColor3 = Settings.Bars.BackgroundColor
+healthBarBG.BorderSizePixel = 0
+
+local healthBar = Instance.new("Frame", healthBarBG)
+healthBar.Size = UDim2.new(1, 0, 1, 0)
+healthBar.BackgroundColor3 = Settings.Bars.HealthColor
+healthBar.BorderSizePixel = 0
+
+local healthBarEffect = Instance.new("Frame", healthBarBG)
+healthBarEffect.Size = UDim2.new(1, 0, 1, 0)
+healthBarEffect.BackgroundColor3 = Settings.Bars.HealthColor
+healthBarEffect.BorderSizePixel = 0
+healthBarEffect.ZIndex = 2
+
+local healthBarStroke = Instance.new("UIStroke", healthBarBG)
+healthBarStroke.Thickness = 1
+healthBarStroke.Color = Settings.Text.StrokeColor
+
+local armorBarBG = Instance.new("Frame", frame)
+armorBarBG.Position = UDim2.new(0, 90, 1, -10)
+armorBarBG.Size = Settings.Bars.Size
+armorBarBG.BackgroundColor3 = Settings.Bars.BackgroundColor
+armorBarBG.BorderSizePixel = 0
+
+local armorBar = Instance.new("Frame", armorBarBG)
+armorBar.Size = UDim2.new(1, 0, 1, 0)
+armorBar.BackgroundColor3 = Settings.Bars.ArmorColor
+armorBar.BorderSizePixel = 0
+
+local armorBarEffect = Instance.new("Frame", armorBarBG)
+armorBarEffect.Size = UDim2.new(1, 0, 1, 0)
+armorBarEffect.BackgroundColor3 = Settings.Bars.ArmorColor
+armorBarEffect.BorderSizePixel = 0
+armorBarEffect.ZIndex = 2
+
+local armorBarStroke = Instance.new("UIStroke", armorBarBG)
+armorBarStroke.Thickness = 1
+armorBarStroke.Color = Settings.Text.StrokeColor
+
+local function getEquippedTool(character)
+    if not character then return "None", "0/0" end
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") then
+            local ammo = child:FindFirstChild("Ammo")
+            local maxAmmo = child:FindFirstChild("MaxAmmo")
+            if ammo and maxAmmo then
+                return child.Name, ammo.Value.."/"..maxAmmo.Value
+            elseif ammo then
+                return child.Name, tostring(ammo.Value)
+            else
+                return child.Name, "N/A"
+            end
+        end
+    end
+    return "None", "0/0"
+end
+
+local function getCrewId(player)
+    if not player then return nil end
+    
+    local success, crewValue = pcall(function()
+        if player:FindFirstChild("DataFolder") then
+            if player.DataFolder:FindFirstChild("Information") then
+                if player.DataFolder.Information:FindFirstChild("Crew") then
+                    return player.DataFolder.Information.Crew.Value
+                end
+            end
+        end
+        return nil
+    end)
+    
+    if success and crewValue then
+        return crewValue
+    end
+    
+    local character = player.Character
+    if not character then return nil end
+    
+    success, crewValue = pcall(function()
+        if character:FindFirstChild("BodyEffects") then
+            if character.BodyEffects:FindFirstChild("Crew") then
+                return character.BodyEffects.Crew.Value
+            end
+        end
+        return nil
+    end)
+    
+    if success then
+        return crewValue
+    end
+    
+    return nil
+end
+
+local function animateBar(bar, effectBar, targetScale, isHealth)
+    if not Settings.Features.AnimatedBars then
+        bar.Size = targetScale
+        effectBar.Size = targetScale
+        return
+    end
+    
+    if isHealth and healthTween then
+        healthTween:Cancel()
+    elseif not isHealth and armorTween then
+        armorTween:Cancel()
+    end
+    
+    local tweenInfo = TweenInfo.new(
+        Settings.Bars.AnimationDuration,
+        Enum.EasingStyle.Quad,
+        Enum.EasingDirection.Out
+    )
+    
+    local tween = TweenService:Create(bar, tweenInfo, {Size = targetScale})
+    tween:Play()
+    
+    if isHealth then
+        healthTween = tween
+    else
+        armorTween = tween
+    end
+    
+    task.delay(0.1, function()
+        local effectTween = TweenService:Create(effectBar, tweenInfo, {Size = targetScale})
+        effectTween:Play()
+    end)
+end
+
+local function flashBar(bar, isDamage)
+    if not Settings.Features.AnimatedBars then return end
+    
+    local originalColor = bar.BackgroundColor3
+    local flashColor = isDamage and Settings.Bars.DamageFlashColor or Settings.Bars.HealFlashColor
+    
+    if bar == healthBar and healthFlashTween then
+        healthFlashTween:Cancel()
+    elseif bar == armorBar and armorFlashTween then
+        armorFlashTween:Cancel()
+    end
+    
+    local flashTween = TweenService:Create(
+        bar,
+        TweenInfo.new(Settings.Bars.FlashDuration / 2, Enum.EasingStyle.Linear),
+        {BackgroundColor3 = flashColor}
+    )
+    flashTween:Play()
+    
+    local returnTween = TweenService:Create(
+        bar,
+        TweenInfo.new(Settings.Bars.FlashDuration / 2, Enum.EasingStyle.Linear),
+        {BackgroundColor3 = originalColor}
+    )
+    
+    if bar == healthBar then
+        healthFlashTween = flashTween
+    else
+        armorFlashTween = flashTween
+    end
+    
+    flashTween.Completed:Connect(function()
+        returnTween:Play()
+    end)
+end
+
+local function updateTargetInfo(newTarget)
+    if newTarget == targetPlayer then return end
+    
+    targetPlayer = newTarget
+    
+    if targetPlayer then
+        targetCharacter = targetPlayer.Character
+        if targetCharacter then
+            targetHumanoid = targetCharacter:FindFirstChild("Humanoid")
+            targetBodyEffects = targetCharacter:FindFirstChild("BodyEffects")
+            if targetBodyEffects then
+                targetArmorValue = targetBodyEffects:FindFirstChild("Armor")
+            end
+        end
+        
+        avatar.Image = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. targetPlayer.UserId .. "&width=420&height=420&format=png"
+        
+        if targetHumanoid then
+            lastHealth = targetHumanoid.Health
+            lastArmor = targetArmorValue and targetArmorValue.Value or 0
+        end
+    else
+        displayName.Text = "Display Name: None"
+        username.Text = "Username: None"
+        userId.Text = "UserId: None"
+        healthText.Text = "Health: 0"
+        armorText.Text = "Armor: 0"
+        toolName.Text = "Tool: None"
+        ammoText.Text = "Ammo: 0/0"
+        crewIdLabel.Text = "Crew: None"
+        avatar.Image = ""
+        
+        animateBar(healthBar, healthBarEffect, UDim2.new(0, 0, 1, 0), true)
+        animateBar(armorBar, armorBarEffect, UDim2.new(0, 0, 1, 0), false)
+        
+        targetHumanoid = nil
+        targetBodyEffects = nil
+        targetArmorValue = nil
+        lastHealth = 0
+        lastArmor = 0
+    end
+end
+
+local function updateInfo()
+    local newTarget = getTarget()
+    
+    if newTarget ~= targetPlayer then
+        updateTargetInfo(newTarget)
+    end
+    
+    if targetPlayer and targetPlayer.Character then
+        if not targetCharacter or targetCharacter ~= targetPlayer.Character then
+            targetCharacter = targetPlayer.Character
+            targetHumanoid = targetCharacter:FindFirstChild("Humanoid")
+            targetBodyEffects = targetCharacter:FindFirstChild("BodyEffects")
+            if targetBodyEffects then
+                targetArmorValue = targetBodyEffects:FindFirstChild("Armor")
+            end
+        end
+        
+        if not targetHumanoid then
+            targetHumanoid = targetCharacter:FindFirstChild("Humanoid")
+            if not targetHumanoid then return end
+        end
+        
+        local health = targetHumanoid.Health
+        local maxHealth = targetHumanoid.MaxHealth
+        local armor = 0
+        
+        if not targetBodyEffects then
+            targetBodyEffects = targetCharacter:FindFirstChild("BodyEffects")
+        end
+        
+        if targetBodyEffects then
+            if not targetArmorValue then
+                targetArmorValue = targetBodyEffects:FindFirstChild("Armor")
+            end
+            armor = targetArmorValue and targetArmorValue.Value or 0
+        end
+        
+        local tool, ammo = getEquippedTool(targetCharacter)
+        local crewId = getCrewId(targetPlayer)
+
+        displayName.Text = "Display Name: " .. targetPlayer.DisplayName
+        username.Text = "Username: @" .. targetPlayer.Name
+        userId.Text = "UserId: " .. tostring(targetPlayer.UserId)
+        healthText.Text = "Health: " .. math.floor(health)
+        armorText.Text = "Armor: " .. math.floor(armor)
+        toolName.Text = "Tool: " .. tool
+        ammoText.Text = Settings.Features.ShowAmmo and "Ammo: "..ammo or ""
+        crewIdLabel.Text = "Crew: " .. (crewId and tostring(crewId) or "None")
+
+        local healthScale = math.clamp(health / maxHealth, 0, 1)
+        local armorScale = math.clamp(armor / 100, 0, 1)
+        
+        local targetHealthScale = UDim2.new(healthScale, 0, 1, 0)
+        animateBar(healthBar, healthBarEffect, targetHealthScale, true)
+        
+        if math.abs(health - lastHealth) > (maxHealth * 0.05) then
+            flashBar(healthBar, health < lastHealth)
+        end
+        lastHealth = health
+        
+        local targetArmorScale = UDim2.new(armorScale, 0, 1, 0)
+        animateBar(armorBar, armorBarEffect, targetArmorScale, false)
+        
+        if math.abs(armor - lastArmor) > 5 then
+            flashBar(armorBar, armor < lastArmor)
+        end
+        lastArmor = armor
+        
+        local healthPercent = health / maxHealth
+        healthBar.BackgroundColor3 = Settings.Bars.HealthColor:Lerp(
+            Color3.fromRGB(255, 0, 0),
+            (1 - healthPercent)
+        )
+        healthBarEffect.BackgroundColor3 = healthBar.BackgroundColor3
+    end
+end
+
+if getgenv()._GetTargetLoop then
+    getgenv()._GetTargetLoop:Disconnect()
+end
+
+getgenv()._GetTargetLoop = RunService.Heartbeat:Connect(function()
+    updateInfo()
+end)
+
+updateTargetInfo(getTarget())
+
+return Settings
